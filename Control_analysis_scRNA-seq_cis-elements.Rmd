@@ -1,0 +1,152 @@
+---
+title: "OBM_TGTCNN_0_4"
+author: "Thimo Harmsen"
+date: "`r Sys.Date()`"
+output: html_document
+---
+  
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+set.seed(39)
+```
+
+
+```{r installing the packages, eval = FALSE, echo = FALSE}
+if (!require("BiocManager", quietly = TRUE))
+  install.packages("BiocManager")
+if (!require("org.Hs.eg.db", quietly = TRUE))
+  BiocManager::install("org.Hs.eg.db")
+if (!require("GO.db", quietly = TRUE))
+  BiocManager::install("GO.db")
+if (!require("rrvgo", quietly = TRUE))
+  BiocManager::install("rrvgo")
+if (!require("c2c", quietly = TRUE))
+  install.packages("c2c")
+if (!require("scPortrait", quietly = TRUE))
+  # while the package is in the private repo, use your github auth token to access it.
+  # create txt file and copy your token to it
+  token <- unlist(read.table(file = "./auth_token.txt"))
+devtools::install_github("TranscriptomicsICG/scPortrait", ref="devel", auth_token = token)
+```
+## Load libraries
+```{r Load libraries, message=FALSE, warning=FALSE}
+library(Seurat)
+library(org.Hs.eg.db)
+library(dplyr)
+library(aricode)
+library(ggplot2)
+library(scPortrait)
+```
+
+
+## renv lockfile checksum
+```{r lockfile checksum, echo=FALSE, message=FALSE, warning=FALSE}
+tools::md5sum("renv.lock")
+```
+
+## Data preprocessing 
+
+###Read counts data
+Type of the data (optional): 
+
+uploading Seurat object
+```{r read counts data, message=FALSE, warning=FALSE}
+seurat.data <- readRDS("~/OBM_Ara_root_benchmark.rds")
+seurat.data[["percent.mt"]] <- PercentageFeatureSet(seurat.data, pattern = "^ATM")
+seurat.data[["percent.ct"]] <- PercentageFeatureSet(seurat.data, pattern = "^ATC")
+seurat.data <- subset(seurat.data, subset = percent.mt <= 20 & percent.ct <= 20 & nCount_RNA >=1000)
+
+```
+uploading cis-element list
+```{r cis element list}
+nn_list <- readRDS("~/TGTCNN_repeats0_4__motif.Rdata")
+ele_list <- unique(nn_list[c("Gene", "Element")])
+View(ele_list)
+
+```
+### Retrieve custom annotation
+
+### Visualize QC metrics as a violin plot
+
+```{r qc volcanoplot, message=FALSE, warning=FALSE, fig.width=15}
+VlnPlot(seurat.data, features = c("nFeature_RNA", "nCount_RNA"), ncol = 2)
+```
+```{r feature-feature plots, message=FALSE, warning=FALSE}
+FeatureScatter(seurat.data, feature1 = "nCount_RNA", feature2 = "nFeature_RNA")
+```
+
+## Run scPortrait
+
+```{r scportrait, message=FALSE, warning=FALSE}
+seurat.data <- scPortrait(seurat.data,ele_list,alt_assay="CisEle",norm_method = "SCT", findMarkers = F, )
+```
+
+save seurat object with scPortrait clustering as rds object
+```{r save data, message=FALSE, warning=FALSE}
+saveRDS(seurat.data, "~/OBM_TGTCNN_0_4_.rds")
+```
+
+## Compare CisEle-based groupings with ground truth and gene-based ones
+
+Compare CisEle- and gene-based groupings 
+```{r, message=FALSE, warning=FALSE, fig.width=10}
+scpCompareHeatmap(seurat.data, display_numbers = T, x_label = "CisEle", y_label = "Genes")
+```
+
+Compare gene- and ground-truth-based groupings
+```{r, message=FALSE, warning=FALSE, fig.width=10}
+scpCompareHeatmap(seurat.data, display_numbers = T,  group.by.1 = "ground_truth", group.by.2 = "SCT_cluster_id", x_label = "Gene-based", y_label = "Ground-truth annotation")
+```
+
+Compare gene- and ground-truth-based groupings
+```{r, message=FALSE, warning=FALSE, fig.width=10}
+scpCompareHeatmap(seurat.data, display_numbers = T,  group.by.1 = "ground_truth", group.by.2 = "CisEle_cluster_id", x_label = "CisEle", y_label = "Ground-truth annotation")
+```
+
+Compare groupings on the UMAP plots
+```{r, message=FALSE, warning=FALSE, fig.height=15, fig.width=15, fig.width=30}
+scPortraitUmap(seurat.data, groups = c("SCT_cluster_id", "CisEle_cluster_id", "ground_truth"))
+```
+
+Identification of marker genes for each cluster
+```{r, message=FALSE, warning=FALSE, echo=FALSE}
+markers <- FindAllMarkers(seurat.data, logfc.threshold = 0.25)
+
+saveRDS(markers, "~/OBM_TGTCNN_0_4_genemarkers_0.25.rds")
+
+markers %>%
+  group_by(cluster) %>%
+  top_n(n = 3, wt = avg_log2FC) -> top3
+```
+
+```{r, message=FALSE, warning=FALSE, fig.height=10, fig.width=10, fig.width=20}
+
+DoHeatmap(seurat.data, features = top3$gene, group.by = "SCT_cluster_id") + NoLegend()
+
+DoHeatmap(seurat.data, features = top3$gene, group.by = "ground_truth") + NoLegend() 
+
+DoHeatmap(seurat.data, features = top3$gene, group.by = "CisEle_cluster_id") + NoLegend()
+
+#sign_features <- signifMarkers(seurat.data, p_adj_thr = 0.05, gini_n_top = 3)
+
+plot <- DotPlot(seurat.data, features = unique(top3$gene), group.by = "ground_truth") + 
+    theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1)) +
+    coord_flip()
+plot
+
+plot2 <- DotPlot(seurat.data, features = unique(top3$gene), group.by = "SCT_cluster_id") + 
+  theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1)) +
+    coord_flip()
+plot2
+
+plot3 <- DotPlot(seurat.data, features = unique(top3$gene), group.by = "CisEle_cluster_id") + 
+  theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1)) +
+    coord_flip()
+plot3
+```
+
+
+
+
+
+
